@@ -68,7 +68,7 @@ var addAttrs = (node, uid) => {
     if( sa.length || da.length ){
         var idd = sa.length && uid;
         return [ 
-            idd ? idd : "null",
+            idd ? '($index ? "' + idd + '-" + $index : ' + idd + ')' : "null",
             idd ? "static_" + idd : "null",
             da.length ? da.join(",") : null
         ];
