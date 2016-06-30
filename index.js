@@ -5,6 +5,8 @@ var parser = require("./rxml.js");
 
 var bodyL = R.lensProp('body');
 
+var imports = 'import {elementOpen,elementClose,elementVoid,text} from "incremental-dom";\nimport * as Rendex from "rendex";';
+
 // noNils :: [a] -> [a]
 var noNils = R.reject(R.isNil);
 
@@ -31,43 +33,45 @@ var globals = ns => State.write(s => [R.filter( isntTextNode, ns ), R.over(R.len
 // isDynamicAttr :: Obj -> Boolean
 isDynamicAttr = R.compose(R.test(/[{}]+/), R.prop('value'));
 
-// getAttr :: Obj -> [String]
-var getAttr = a => [ '"' + a.name + '"', '"' + a.value + '"' ];
+// getStatAttr :: Obj -> [String]
+var getStatAttr = a => [ '"' + a.name + '"', '"' + a.value + '"' ];
+
+// getAttr :: String -> [attr] -> [String]
+var getAttr = (name,attrs) => R.compose(R.prop('value'),R.find(R.propEq('name',name)))(attrs);
+
+// parseText :: String -> String
+parseText = R.compose( R.replace( "{", '"+' ) , R.replace( "}", '+"' ));
+
+// getDynAttr :: Obj -> [String]
+var getDynAttr = a => [ '"' + a.name + '"', '"' + parseText(a.value) + '"' ];
 
 // staticAttrs :: [attr] -> [String]
-var staticAttrs = R.compose( R.flatten, R.map(getAttr), R.reject(isDynamicAttr) );
+var staticAttrs = R.compose( R.flatten, R.map(getStatAttr), R.reject(isDynamicAttr) );
 
 // dynamicAttrs :: [attr] -> [String]
-var dynamicAttrs = R.compose( R.flatten, R.map(getAttr), R.filter(isDynamicAttr) );
+var dynamicAttrs = R.compose( R.flatten, R.map(getDynAttr), R.filter(isDynamicAttr) );
 
 // stringify :: [String] -> String
 var stringify = R.compose( R.join(","), noNils, R.flatten );
 
 // defStatAttrs :: node -> String -> String
 var defStatAttrs = (node, uid) => {
-
     var sa = staticAttrs( node.attributes );
     if( sa.length ){
         return 'var static_' + uid + ' = ' + '[' + staticAttrs( node.attributes ) + '];';
     }
-
 }
 // addAttrs :: node -> String -> String
 var addAttrs = (node, uid) => {
-
     var sa = staticAttrs( node.attributes );
     var da = dynamicAttrs( node.attributes );
-
     if( sa.length || da.length ){
-
         var idd = sa.length && uid;
-
         return [ 
-            idd ? '"' + idd + '"' : "null",
+            idd ? idd : "null",
             idd ? "static_" + idd : "null",
             da.length ? da.join(",") : null
         ];
-
     }
 }
 
@@ -85,54 +89,79 @@ var elemify = (str, node, uid) => R.compose(
 var appendToBody = R.curry((str,state) => [[],bodify(str,state)]);
 
 // textElement :: node -> State(_, state)
-var textElement = node => State.write(appendToBody("text(" + node.content + ");"));
+var textElement = node => State.write(appendToBody('text("' + parseText(node.content) + '");'));
 
 // voidElement :: node -> State(_, state)
 var voidElement = node => State.write( s => {
-
     var uid = s.uid;
-
-    var buff = stringify(['elementVoid(' + node.name, addAttrs( node, uid )]) + ");";
-
+    var buff = stringify(['elementVoid("' + node.name + '"', addAttrs( node, uid )]) + ");";
     return [node, elemify( buff, node, uid )( s )];
 });
 
-// compoundElement :: [node] -> State([node], state)
+// importRenderBranch :: node -> State(_, state)
+importRenderBranch = _ => State.write(s => 
+		[_, R.over(R.lensProp('imports'), R.append('import * as Rendex from "rendex"'), s )]);
+
+// branchTerminal :: node -> State(_, state)
+var branchTerminal = node => State.write(s => {
+	var str = "Rendex.renderBranch({$id, $node, $model, $context, $templates, $options});";
+	return [node, bodify(str,s)];
+});
+
+// ifBegin :: [node] -> State([node], state)
+var ifBegin = node => State.write(s => [node, bodify('if(' + getAttr('test', node.attributes) + '){', s)]);
+
+// closeBrace :: [node] -> State([node], state)
+var closeBrace = node => State.write(s => [node, bodify('}', s)]);
+
+// compoundElementBegin :: [node] -> State([node], state)
 var compoundElementBegin = node => State.write( s => {
     var uid = s.uid;
-    var buff = stringify(['elementOpen(' + node.name, addAttrs( node, uid )]) + ")";
+    var buff = stringify(['elementOpen("' + node.name + '"', addAttrs( node, uid )]) + ");";
     return [node, elemify( buff, node, uid )( s )];
 });
 
+// compoundElementEnd :: [node] -> State([node], state)
 var compoundElementEnd = node => State.write( s => {
-    return [node, R.over( bodyL, R.append( 'elementClose(' + node.name + ');' ), s)];
+    return [node, R.over( bodyL, R.append( 'elementClose("' + node.name + '");' ), s)];
 });
 
 // goContent :: [node] => State([node], state)
-var goContent = ns => {
+const goContent = ns => {
 
 	if( ns.length === 0 ){
 		return State.of([]);
 	}
 
-	var node = ns[0];
+	const node = ns[0];
 
 	if( node.type === 'Text' ){
 		return R.composeK( goContent, tail(ns), textElement )(State.of(node));
 	}
+	else if( node.name === 'branch' ){
+		return R.composeK(goContent, tail(ns), branchTerminal)(State.of(node));
+	}
 	else if( node.type === 'SelfClosingTag' ){
-		return R.composeK( goContent, tail(ns), voidElement )(State.of(node));
+			return R.composeK( goContent, tail(ns), voidElement )(State.of(node));
 	}
 	else if( node.type === 'BalancedTag' ){
-		return R.composeK( 
-			   	goContent,
-				tail(ns),
-				compoundElementEnd,
-				of(node),
-			   	goContent,
-				of(node.content),
-			   	compoundElementBegin 
-				)(State.of(node));
+
+		const content = (begin,end) => R.composeK( 
+					goContent,
+					tail(ns),
+					end,
+					of(node),
+					goContent,
+					of(node.content),
+					begin 
+					)(State.of(node));
+
+		if( node.name === 'if' ){
+			return content(ifBegin, closeBrace);
+		}
+		else{
+			return content(compoundElementBegin, compoundElementEnd);
+		}
 	}
 	else{
 		return State.of([]);
@@ -142,7 +171,7 @@ var goContent = ns => {
 // defineFunc :: node -> String
 var defineFunc = node => {
     var name = node.attributes.find( a => a.name === 'name' );
-    var args = "$id, $model, $context, $templates, $options";
+    var args = "$id, $node, $model, $context, $templates, $options, $index";
     return "export const " + name.value + " = ({" + args + "}) => {";
 }
 
@@ -150,7 +179,6 @@ var defineFunc = node => {
 var beginTemplateFunc = node => State.write(appendToBody(defineFunc(node)));
 
 // endTemplateFunc :: node => State(_, state)
-//var endTemplateFunc = node => State.write(appendToBody( "}", R.tail(ns)) );
 var endTemplateFunc = node => State.write(appendToBody( "}"));
 
 // templates :: [node] => State([node], state)
@@ -178,19 +206,14 @@ var templates = ns => {
 
 var translate = R.composeK(templates, globals);
 
-var input = fs.readFileSync("./test.html", {encoding: 'utf8'});
-var model = parser.parse( input );
+module.exports = function(input){
 
-console.log( model );
+	var model = parser.parse( input );
 
-var res = translate( State.of(model) ).run({globals:[], statics:[], body:[],uid:1})[ 1 ];
+	var res = translate( State.of(model) ).run({imports:[imports], globals:[], statics:[], body:[],uid:1})[ 1 ];
 
-console.log( res );
+	var output = res.imports.join("\n") + "\n" + res.globals.join("\n") + "\n" + res.statics.join("\n") + "\n" + res.body.join("\n") + "\n";
 
-var buff = "\n\n" + res.globals.join("\n") + "\n" + res.statics.join("\n") + "\n" + res.body.join("\n") + "\n";
-
-console.log( buff );
-
-//module.exports = function(opts){
-//}
+	return output;
+}
 
