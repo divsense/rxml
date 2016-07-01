@@ -40,10 +40,22 @@ var getStatAttr = a => [ '"' + a.name + '"', '"' + a.value + '"' ];
 var getAttr = (name,attrs) => R.compose(R.prop('value'),R.find(R.propEq('name',name)))(attrs);
 
 // parseText :: String -> String
-parseText = R.compose( R.replace( "{", '"+' ) , R.replace( "}", '+"' ));
+//parseText = R.compose( R.replace( "{", '"+' ) , R.replace( "}", '+"' ));
+parseText = R.replace( /\{([^{}]+)\}/g, '" +' + '$1' + '+ "');
+
+// parseFunc :: String -> String
+parseFunc = R.compose( R.replace( "{", '' ) , R.replace( "}", '' ));
 
 // getDynAttr :: Obj -> [String]
-var getDynAttr = a => [ '"' + a.name + '"', '"' + parseText(a.value) + '"' ];
+var getDynAttr = a => {
+
+    if (a.name.substr(0, 2) === 'on') {
+        return [ '"' + a.name + '"', parseFunc(a.value) ];
+    }
+    else{
+        return [ '"' + a.name + '"', '"' + parseText(a.value) + '"' ];
+    }
+}
 
 // staticAttrs :: [attr] -> [String]
 var staticAttrs = R.compose( R.flatten, R.map(getStatAttr), R.reject(isDynamicAttr) );
