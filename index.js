@@ -70,7 +70,7 @@ var stringify = R.compose( R.join(","), noNils, R.flatten );
 var defStatAttrs = (node, uid) => {
     var sa = staticAttrs( node.attributes );
     if( sa.length ){
-        return 'var static_' + uid + ' = ' + '[' + staticAttrs( node.attributes ) + '];';
+        return 'let static_' + uid + ' = ' + '[' + staticAttrs( node.attributes ) + '];';
     }
 }
 // addAttrs :: node -> String -> String
@@ -88,7 +88,15 @@ var addAttrs = (node, uid) => {
 }
 
 // bodify :: String -> state -> state
-var bodify = (str,state) => R.compose( R.over(bodyL, R.append( str )) )( state );
+var bodify = (str,state) => {
+    if( str ){
+        return R.over(bodyL, R.append( str ), state );
+    }
+    return state;
+}
+
+// appendToBody :: (node -> String) -> state -> state
+var appendToBody = R.curry((fn,node) => State.write(state => [node, bodify(fn(node), state)]));
 
 // elemify :: String -> node -> String -> state
 var elemify = (str, node, uid) => R.compose(
@@ -97,11 +105,9 @@ var elemify = (str, node, uid) => R.compose(
     , R.over( R.lensProp('statics'), R.compose(noNils, R.append(defStatAttrs(node, uid))))
     );
 
-// appendToBody :: String -> state -> state
-var appendToBody = R.curry((str,state) => [[],bodify(str,state)]);
 
 // textElement :: node -> State(_, state)
-var textElement = node => State.write(appendToBody('text("' + parseText(node.content) + '");'));
+var textElement = node => State.write(state => [node, bodify('text("' + parseText(node.content) + '");', state)]);
 
 // voidElement :: node -> State(_, state)
 var voidElement = node => State.write( s => {
@@ -110,13 +116,16 @@ var voidElement = node => State.write( s => {
     return [node, elemify( buff, node, uid )( s )];
 });
 
-// importRenderBranch :: node -> State(_, state)
-importRenderBranch = _ => State.write(s => 
-		[_, R.over(R.lensProp('imports'), R.append('import * as Rendex from "rendex"'), s )]);
-
-// branchTerminal :: node -> State(_, state)
+// branchTerminal :: node -> State(node, state)
 var branchTerminal = node => State.write(s => {
-	var str = "Rendex.renderBranch({$id, $node, $model, $context, $templates, $options});";
+    var str = 'Rendex.renderBranch({$id, $node, $model, $context, $templates, $options';
+    if( node.attributes.length ){
+        var branchName = getAttr('name', node.attributes);
+        if( branchName ){
+            str += ', $branchname: "' + branchName + '"';
+        }
+    }
+    str += '});';
 	return [node, bodify(str,s)];
 });
 
@@ -139,13 +148,13 @@ var compoundElementEnd = node => State.write( s => {
 });
 
 // goContent :: [node] => State([node], state)
-const goContent = ns => {
+var goContent = ns => {
 
 	if( ns.length === 0 ){
 		return State.of([]);
 	}
 
-	const node = ns[0];
+	var node = ns[0];
 
 	if( node.type === 'Text' ){
 		return R.composeK( goContent, tail(ns), textElement )(State.of(node));
@@ -158,7 +167,7 @@ const goContent = ns => {
 	}
 	else if( node.type === 'BalancedTag' ){
 
-		const content = (begin,end) => R.composeK( 
+		var content = (begin,end) => R.composeK( 
 					goContent,
 					tail(ns),
 					end,
@@ -187,11 +196,17 @@ var defineFunc = node => {
     return "export const " + name.value + " = ({" + args + "}) => {";
 }
 
-// beginTemplateFunc :: node => State(_, state)
-var beginTemplateFunc = node => State.write(appendToBody(defineFunc(node)));
+// maybeLog :: node -> String
+var maybeLog = node => {
+    var log = node.attributes.find( a => a.name === 'log' );
+    return log && 'console.log("' + name.value + '",' + log.value + ')';
+}
 
-// endTemplateFunc :: node => State(_, state)
-var endTemplateFunc = node => State.write(appendToBody( "}"));
+// maybeIf :: node -> String
+var maybeIf = node => {
+    var i = node.attributes.find( a => a.name === 'if' );
+    return i && 'if(!(' + i.value + ')) return;';
+}
 
 // templates :: [node] => State([node], state)
 var templates = ns => {
@@ -205,11 +220,13 @@ var templates = ns => {
         return R.composeK( 
 				templates,
 				tail(ns),
-				endTemplateFunc,
+                appendToBody( R.always("}") ),
 				of(node),
 				goContent,
 				of(node.content),
-			   	beginTemplateFunc
+                appendToBody( maybeIf ),
+                appendToBody( maybeLog ),
+                appendToBody( defineFunc )
 				)( State.of(node) );
     }
 
