@@ -1,4 +1,5 @@
 var fs = require("fs");
+var uuid = require("node-uuid");
 var R = require("ramda");
 var State = require("momon").State;
 var parser = require("./rxml.js");
@@ -80,7 +81,7 @@ var addAttrs = (node, uid) => {
     if( sa.length || da.length ){
         var idd = sa.length && uid;
         return [ 
-            idd ? '($index ? "' + idd + '-" + $index : ' + idd + ')' : "null",
+            idd ? "'" + uuid.v4() + "'+$index" : "null",
             idd ? "static_" + idd : "null",
             da.length ? da.join(",") : null
         ];
@@ -105,15 +106,20 @@ var elemify = (str, node, uid) => R.compose(
     , R.over( R.lensProp('statics'), R.compose(noNils, R.append(defStatAttrs(node, uid))))
     );
 
-
 // textElement :: node -> State(_, state)
-var textElement = node => State.write(state => [node, bodify('text("' + parseText(node.content) + '");', state)]);
+var textElement = node => State.write(s => [node, bodify(s.script ? node.content : 'text("' + parseText(node.content) + '");', s)]);
 
 // voidElement :: node -> State(_, state)
 var voidElement = node => State.write( s => {
     var uid = s.uid;
     var buff = stringify(['elementVoid("' + node.name + '"', addAttrs( node, uid )]) + ");";
     return [node, elemify( buff, node, uid )( s )];
+});
+
+// gridRow :: node -> State(node, state)
+var gridRow = node => State.write(s => {
+    var str = 'Rendex.renderSection({$id,$node,$model,$context,$templates,$options},$b,$e)';
+	return [node, bodify(str,s)];
 });
 
 // branchTerminal :: node -> State(node, state)
@@ -132,6 +138,11 @@ var branchTerminal = node => State.write(s => {
 // ifBegin :: [node] -> State([node], state)
 var ifBegin = node => State.write(s => [node, bodify('if(' + getAttr('test', node.attributes) + '){', s)]);
 
+// gridBegin :: [node] -> State([node], state)
+var gridBegin = node => State.write(s => {
+    var cols = getAttr('cols', node.attributes);
+    return [node, bodify('for(let $i=0,$b=0,$e='+cols+';$i<(1+$node.branch.length/'+cols+');$i++,$b=$i*'+cols+',$e=$b+'+cols+'){let $index=$i;', s)]});
+
 // closeBrace :: [node] -> State([node], state)
 var closeBrace = node => State.write(s => [node, bodify('}', s)]);
 
@@ -147,6 +158,10 @@ var compoundElementEnd = node => State.write( s => {
     return [node, R.over( bodyL, R.append( 'elementClose("' + node.name + '");' ), s)];
 });
 
+var scriptMode = R.curry((mode,node) => State.write(s => [node, R.set(R.lensProp('script'), mode, s)]));
+var scriptBegin = scriptMode(true);
+var scriptEnd = scriptMode(false);
+
 // goContent :: [node] => State([node], state)
 var goContent = ns => {
 
@@ -158,6 +173,9 @@ var goContent = ns => {
 
 	if( node.type === 'Text' ){
 		return R.composeK( goContent, tail(ns), textElement )(State.of(node));
+	}
+	else if( node.name === 'branchrow' ){
+		return R.composeK(goContent, tail(ns), gridRow)(State.of(node));
 	}
 	else if( node.name === 'branch' ){
 		return R.composeK(goContent, tail(ns), branchTerminal)(State.of(node));
@@ -180,11 +198,20 @@ var goContent = ns => {
 		if( node.name === 'if' ){
 			return content(ifBegin, closeBrace);
 		}
-		else{
+        else if( node.name === 'branchgrid' ){
+            return content(gridBegin, closeBrace);
+        }
+        else if( node.name === 'script' ){
+            return content(scriptBegin, scriptEnd);
+        }
+        else{
 			return content(compoundElementBegin, compoundElementEnd);
 		}
 	}
-	else{
+    else if( node.type === 'Comment' ){
+        return goContent( R.tail(ns) );
+    }
+    else{
 		return State.of([]);
 	}
 }
@@ -210,11 +237,13 @@ var maybeIf = node => {
 
 // templates :: [node] => State([node], state)
 var templates = ns => {
+
 	if( ns.length === 0 ){
 		return State.of("end");
 	}
 
 	var node = ns[0];
+
 
     if( node.name === 'template' ){
         return R.composeK( 
@@ -239,7 +268,7 @@ module.exports = function(input){
 
 	var model = parser.parse( input );
 
-	var res = translate( State.of(model) ).run({imports:[imports], globals:[], statics:[], body:[],uid:1})[ 1 ];
+	var res = translate( State.of(model) ).run({imports:[imports], globals:[], statics:[], body:[], uid:1, script: false})[ 1 ];
 
 	var output = res.imports.join("\n") + "\n" + res.globals.join("\n") + "\n" + res.statics.join("\n") + "\n" + res.body.join("\n") + "\n";
 
