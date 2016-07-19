@@ -42,10 +42,10 @@ var getAttr = (name,attrs) => R.compose(R.prop('value'),R.find(R.propEq('name',n
 
 // parseText :: String -> String
 //parseText = R.compose( R.replace( "{", '"+' ) , R.replace( "}", '+"' ));
-parseText = R.replace( /\{([^{}]+)\}/g, '" +' + '$1' + '+ "');
+parseText = R.replace( /\{([^{}]+)\}/g, '" + (' + '$1' + ') + "');
 
 // parseFunc :: String -> String
-parseFunc = R.compose( R.replace( "{", '' ) , R.replace( "}", '' ));
+parseFunc = R.compose( R.replace( "{", '(' ) , R.replace( "}", ')' ));
 
 // getDynAttr :: Obj -> [String]
 var getDynAttr = a => {
@@ -138,6 +138,12 @@ var branchTerminal = node => State.write(s => {
 // ifBegin :: [node] -> State([node], state)
 var ifBegin = node => State.write(s => [node, bodify('if(' + getAttr('test', node.attributes) + '){', s)]);
 
+// elseIfBegin :: [node] -> State([node], state)
+var elseIfBegin = node => State.write(s => [node, bodify('else if(' + getAttr('test', node.attributes) + '){', s)]);
+
+// elseBegin :: [node] -> State([node], state)
+var elseBegin = node => State.write(s => [node, bodify('else {', s)]);
+
 // gridBegin :: [node] -> State([node], state)
 var gridBegin = node => State.write(s => {
     var cols = getAttr('cols', node.attributes);
@@ -197,6 +203,12 @@ var goContent = ns => {
 
 		if( node.name === 'if' ){
 			return content(ifBegin, closeBrace);
+		}
+		else if( node.name === 'elseif' ){
+			return content(elseIfBegin, closeBrace);
+		}
+		else if( node.name === 'else' ){
+			return content(elseBegin, closeBrace);
 		}
         else if( node.name === 'branchgrid' ){
             return content(gridBegin, closeBrace);
