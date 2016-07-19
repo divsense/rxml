@@ -21,9 +21,9 @@
   },
   "homepage": "https://github.com/divsense/rxml#readme",
   "dependencies": {
-    "momon": "^0.1.2",
+    "mond": "^0.4.1",
     "ramda": "^0.21.0",
-    "rendex": "0.0.5"
+    "rendex": "^0.3.4"
   },
   "devDependencies": {
     "ava": "^0.15.2"

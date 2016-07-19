@@ -1,7 +1,7 @@
 var fs = require("fs");
 var uuid = require("node-uuid");
 var R = require("ramda");
-var State = require("momon").State;
+var State = require("mond").State;
 var parser = require("./rxml.js");
 
 var bodyL = R.lensProp('body');
