@@ -1,6 +1,6 @@
 {
   "name": "rxml",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Rendex template translator",
   "main": "index.js",
   "scripts": {
