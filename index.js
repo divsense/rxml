@@ -8,6 +8,8 @@ var bodyL = R.lensProp('body');
 
 var imports = 'import {elementOpen,elementClose,elementVoid,text} from "incremental-dom";\nimport * as Rendex from "rendex";';
 
+var renderBranchBegin = 'Rendex.renderBranch({$id, $node, $model, $context, $templates, $options';
+
 // noNils :: [a] -> [a]
 var noNils = R.reject(R.isNil);
 
@@ -31,8 +33,11 @@ var gtext = R.compose( R.map(R.prop('content')), R.filter( isTextNode ) );
 // globals :: [node] => State([node], state)
 var globals = ns => State.write(s => [R.filter( isntTextNode, ns ), R.over(R.lensProp('globals'), R.concat(gtext(ns)), s)]);
 
+// isDynText :; String -> Boolean
+var isDynText = R.test(/\{[^{}]+\}/);
+
 // isDynamicAttr :: Obj -> Boolean
-isDynamicAttr = R.compose(R.test(/[{}]+/), R.prop('value'));
+isDynamicAttr = R.compose( isDynText, R.prop('value'));
 
 // getStatAttr :: Obj -> [String]
 var getStatAttr = a => [ '"' + a.name + '"', '"' + a.value + '"' ];
@@ -41,17 +46,21 @@ var getStatAttr = a => [ '"' + a.name + '"', '"' + a.value + '"' ];
 var getAttr = (name,attrs) => R.compose(R.prop('value'),R.find(R.propEq('name',name)))(attrs);
 
 // parseText :: String -> String
-//parseText = R.compose( R.replace( "{", '"+' ) , R.replace( "}", '+"' ));
-parseText = R.replace( /\{([^{}]+)\}/g, '" + (' + '$1' + ') + "');
+parseText = R.compose(
+        R.replace( /\{([^=][^{}]+)\}/g, '" + ($1) + "'),
+        R.replace( /\{=([^{}]+)\}/g, '$1')
+        );
 
 // parseFunc :: String -> String
-parseFunc = R.compose( R.replace( "{", '(' ) , R.replace( "}", ')' ));
+parseFunc = R.compose( R.replace( "{", '$event=>' ) , R.replace( "}", '' ));
 
 // getDynAttr :: Obj -> [String]
 var getDynAttr = a => {
-
     if (a.name.substr(0, 2) === 'on') {
         return [ '"' + a.name + '"', parseFunc(a.value) ];
+    }
+    else if (a.name.substr(0, 3) === 'hs-') {
+        return [ '"' + a.name.substr(3) + '"', parseText(a.value) ];
     }
     else{
         return [ '"' + a.name + '"', '"' + parseText(a.value) + '"' ];
@@ -74,6 +83,7 @@ var defStatAttrs = (node, uid) => {
         return 'let static_' + uid + ' = ' + '[' + staticAttrs( node.attributes ) + '];';
     }
 }
+
 // addAttrs :: node -> String -> String
 var addAttrs = (node, uid) => {
     var sa = staticAttrs( node.attributes );
@@ -124,7 +134,7 @@ var gridRow = node => State.write(s => {
 
 // branchTerminal :: node -> State(node, state)
 var branchTerminal = node => State.write(s => {
-    var str = 'Rendex.renderBranch({$id, $node, $model, $context, $templates, $options';
+    var str = renderBranchBegin;
     if( node.attributes.length ){
         var branchName = getAttr('name', node.attributes);
         if( branchName ){
@@ -238,7 +248,7 @@ var defineFunc = node => {
 // maybeLog :: node -> String
 var maybeLog = node => {
     var log = node.attributes.find( a => a.name === 'log' );
-    return log && 'console.log("' + name.value + '",' + log.value + ')';
+    return log && 'console.log("' + log.value + '",' + log.value + ')';
 }
 
 // maybeIf :: node -> String
