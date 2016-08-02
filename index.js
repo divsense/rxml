@@ -42,14 +42,14 @@ isDynamicAttr = R.compose( isDynText, R.prop('value'));
 // getStatAttr :: Obj -> [String]
 var getStatAttr = a => [ '"' + a.name + '"', '"' + a.value + '"' ];
 
-// getAttr :: String -> [attr] -> [String]
+// getAttr :: String -> [attr] -> String
 var getAttr = (name,attrs) => R.compose(R.prop('value'),R.find(R.propEq('name',name)))(attrs);
 
 // parseText :: String -> String
-parseText = R.compose(
-        R.replace( /\{([^=][^{}]+)\}/g, '" + ($1) + "'),
-        R.replace( /\{=([^{}]+)\}/g, '$1')
-        );
+parseText = R.replace( /\{([^{}]+)\}/g, '" + ($1) + "');
+
+// parseTextRaw :: String -> String
+parseTextRaw = R.replace( /\{([^{}]+)\}/g, '$1');
 
 // parseFunc :: String -> String
 parseFunc = R.compose( R.replace( "{", '$event=>' ) , R.replace( "}", '' ));
@@ -58,9 +58,6 @@ parseFunc = R.compose( R.replace( "{", '$event=>' ) , R.replace( "}", '' ));
 var getDynAttr = a => {
     if (a.name.substr(0, 2) === 'on') {
         return [ '"' + a.name + '"', parseFunc(a.value) ];
-    }
-    else if (a.name.substr(0, 3) === 'hs-') {
-        return [ '"' + a.name.substr(3) + '"', parseText(a.value) ];
     }
     else{
         return [ '"' + a.name + '"', '"' + parseText(a.value) + '"' ];
@@ -91,7 +88,8 @@ var addAttrs = (node, uid) => {
     if( sa.length || da.length ){
         var idd = sa.length && uid;
         return [ 
-            idd ? "'" + uuid.v4() + "'+$index" : "null",
+            //idd ? "'" + uuid.v4() + "'+$index" : "null",
+            idd ? "'" + uuid.v4() + "'" : "null",
             idd ? "static_" + idd : "null",
             da.length ? da.join(",") : null
         ];
@@ -138,18 +136,36 @@ var branchTerminal = node => State.write(s => {
     if( node.attributes.length ){
         var branchName = getAttr('name', node.attributes);
         if( branchName ){
-            str += ', $branchname: "' + branchName + '"';
+            str += ', $branchname: "' + parseText(branchName) + '"';
         }
     }
     str += '});';
 	return [node, bodify(str,s)];
 });
 
+// includeTemplate :: node -> State(node, state)
+var includeTemplate = node => State.write(s => {
+    if( node.attributes.length ){
+        var tmpl = getAttr('template', node.attributes);
+		if( tmpl ){
+			var str = 'Rendex.renderTemplate("' + parseText(tmpl) + '", {$id,$node,$model,$context,$templates,$options,$siblings,$parent});';
+			return [node, bodify(str,s)];
+		}
+    }
+	return [node, s];
+});
+
+// _begin :: String -> [node] -> State([node], state)
+var _begin = name => node => State.write(s => [node, bodify( name + '(' + getAttr('test', node.attributes) + '){', s)]);
+
+// forBegin :: [node] -> State([node], state)
+//var forBegin = _Begin('for');
+
 // ifBegin :: [node] -> State([node], state)
-var ifBegin = node => State.write(s => [node, bodify('if(' + getAttr('test', node.attributes) + '){', s)]);
+//var ifBegin = node => State.write(s => [node, bodify('if(' + getAttr('test', node.attributes) + '){', s)]);
 
 // elseIfBegin :: [node] -> State([node], state)
-var elseIfBegin = node => State.write(s => [node, bodify('else if(' + getAttr('test', node.attributes) + '){', s)]);
+//var elseIfBegin = node => State.write(s => [node, bodify('else if(' + getAttr('test', node.attributes) + '){', s)]);
 
 // elseBegin :: [node] -> State([node], state)
 var elseBegin = node => State.write(s => [node, bodify('else {', s)]);
@@ -196,6 +212,9 @@ var goContent = ns => {
 	else if( node.name === 'branch' ){
 		return R.composeK(goContent, tail(ns), branchTerminal)(State.of(node));
 	}
+	else if( node.name === 'include' ){
+		return R.composeK(goContent, tail(ns), includeTemplate)(State.of(node));
+	}
 	else if( node.type === 'SelfClosingTag' ){
 			return R.composeK( goContent, tail(ns), voidElement )(State.of(node));
 	}
@@ -212,10 +231,16 @@ var goContent = ns => {
 					)(State.of(node));
 
 		if( node.name === 'if' ){
-			return content(ifBegin, closeBrace);
+			return content(_begin('if'), closeBrace);
 		}
 		else if( node.name === 'elseif' ){
-			return content(elseIfBegin, closeBrace);
+			return content(_begin('else if'), closeBrace);
+		}
+		else if( node.name === 'for' ){
+			return content(_begin('for'), closeBrace);
+		}
+		else if( node.name === 'while' ){
+			return content(_begin('while'), closeBrace);
 		}
 		else if( node.name === 'else' ){
 			return content(elseBegin, closeBrace);
@@ -241,14 +266,17 @@ var goContent = ns => {
 // defineFunc :: node -> String
 var defineFunc = node => {
     var name = node.attributes.find( a => a.name === 'name' );
-    var args = "$id, $node, $model, $context, $templates, $options, $index";
+    var args = "$id, $node, $model, $context, $templates, $options, $siblings, $parent, $index";
     return "export const " + name.value + " = ({" + args + "}) => {";
 }
 
 // maybeLog :: node -> String
 var maybeLog = node => {
     var log = node.attributes.find( a => a.name === 'log' );
-    return log && 'console.log("' + log.value + '",' + log.value + ')';
+	if( log ){
+		var name = getAttr('name', node.attributes);
+		return 'console.log("' + name + ': ' + log.value + ' = ",' + log.value + ')';
+	}
 }
 
 // maybeIf :: node -> String
