@@ -8,7 +8,7 @@ var bodyL = R.lensProp('body');
 
 var imports = 'import {elementOpen,elementClose,elementVoid,text} from "incremental-dom";\nimport * as Rendex from "rendex";';
 
-var renderBranchBegin = 'Rendex.renderBranch({$id, $node, $model, $context, $templates, $options';
+var getVal = x => x && x.value
 
 // noNils :: [a] -> [a]
 var noNils = R.reject(R.isNil);
@@ -43,25 +43,34 @@ isDynamicAttr = R.compose( isDynText, R.prop('value'));
 var getStatAttr = a => [ '"' + a.name + '"', '"' + a.value + '"' ];
 
 // getAttr :: String -> [attr] -> String
-var getAttr = (name,attrs) => R.compose(R.prop('value'),R.find(R.propEq('name',name)))(attrs);
+var getAttr = (name,attrs) => R.compose( getVal, R.find(R.propEq('name',name)))(attrs);
+
+// makeSignal :: [String] -> String
+var makeSignal = xs => "$event => document.body.dispatchEvent(new CustomEvent(" + R.trim(R.head(xs)) + ",{detail:[" + R.join(",", R.tail(xs)) + "]}))";
+
+// parseSignal :: String -> String
+var parseSignal = R.compose( makeSignal, R.filter(R.compose(R.not, R.isEmpty)), R.split(" "), R.replace( /\{!\s*([^{}]+)\s*\}/, '$1') );
 
 // parseText :: String -> String
-parseText = R.replace( /\{([^{}]+)\}/g, '" + ($1) + "');
-
-// parseTextRaw :: String -> String
-parseTextRaw = R.replace( /\{([^{}]+)\}/g, '$1');
+var parseText = R.compose(
+        R.replace( /\{=\s*([^{}]+)\s*\}/g, '" + $1($data) + "'),
+        R.replace( /\{([^=][^{}]+)\}/g, '" + ($1) + "')
+        );
 
 // parseFunc :: String -> String
-parseFunc = R.compose( R.replace( "{", '$event=>' ) , R.replace( "}", '' ));
+var parseFunc = R.compose( R.replace( "{", '$event=>' ) , R.replace( "}", '' ));
 
 // getDynAttr :: Obj -> [String]
 var getDynAttr = a => {
-    if (a.name.substr(0, 2) === 'on') {
-        return [ '"' + a.name + '"', parseFunc(a.value) ];
-    }
-    else{
+	if (a.name.substr(0, 2) === 'on') {
+		if( /^{!/.test( a.value ) ){
+			return [ '"' + a.name + '"', parseSignal(a.value) ];
+		}
+		return [ '"' + a.name + '"', parseFunc(a.value) ];
+	}
+	else{
         return [ '"' + a.name + '"', '"' + parseText(a.value) + '"' ];
-    }
+	}
 }
 
 // staticAttrs :: [attr] -> [String]
@@ -88,8 +97,7 @@ var addAttrs = (node, uid) => {
     if( sa.length || da.length ){
         var idd = sa.length && uid;
         return [ 
-            //idd ? "'" + uuid.v4() + "'+$index" : "null",
-            idd ? "'" + uuid.v4() + "'" : "null",
+            idd ? "'" + uuid.v4() + "'+$index" : "null",
             idd ? "static_" + idd : "null",
             da.length ? da.join(",") : null
         ];
@@ -124,22 +132,27 @@ var voidElement = node => State.write( s => {
     return [node, elemify( buff, node, uid )( s )];
 });
 
-// gridRow :: node -> State(node, state)
-var gridRow = node => State.write(s => {
-    var str = 'Rendex.renderSection({$id,$node,$model,$context,$templates,$options},$b,$e)';
-	return [node, bodify(str,s)];
-});
-
 // branchTerminal :: node -> State(node, state)
 var branchTerminal = node => State.write(s => {
-    var str = renderBranchBegin;
+	var str = 'Rendex.renderBranch($data';
     if( node.attributes.length ){
         var branchName = getAttr('name', node.attributes);
         if( branchName ){
-            str += ', $branchname: "' + parseText(branchName) + '"';
+            str += ', "' + parseText(branchName) + '"';
         }
+        var branchRange = getAttr('range', node.attributes);
+		if( branchRange ){
+            str += ', [' + parseText(branchRange) + ']';
+		}
+		else{
+			str += ', null';
+		}
+        var branchFilter = getAttr('filter', node.attributes);
+		if( branchFilter ){
+            str += ', "' + parseText(branchFilter) + '"';
+		}
     }
-    str += '});';
+	str += ");";
 	return [node, bodify(str,s)];
 });
 
@@ -148,7 +161,7 @@ var includeTemplate = node => State.write(s => {
     if( node.attributes.length ){
         var tmpl = getAttr('template', node.attributes);
 		if( tmpl ){
-			var str = 'Rendex.renderTemplate("' + parseText(tmpl) + '", {$id,$node,$model,$context,$templates,$options,$siblings,$parent});';
+			var str = 'Rendex.renderTemplate($data,"' + parseText(tmpl) + '");';
 			return [node, bodify(str,s)];
 		}
     }
@@ -157,15 +170,6 @@ var includeTemplate = node => State.write(s => {
 
 // _begin :: String -> [node] -> State([node], state)
 var _begin = name => node => State.write(s => [node, bodify( name + '(' + getAttr('test', node.attributes) + '){', s)]);
-
-// forBegin :: [node] -> State([node], state)
-//var forBegin = _Begin('for');
-
-// ifBegin :: [node] -> State([node], state)
-//var ifBegin = node => State.write(s => [node, bodify('if(' + getAttr('test', node.attributes) + '){', s)]);
-
-// elseIfBegin :: [node] -> State([node], state)
-//var elseIfBegin = node => State.write(s => [node, bodify('else if(' + getAttr('test', node.attributes) + '){', s)]);
 
 // elseBegin :: [node] -> State([node], state)
 var elseBegin = node => State.write(s => [node, bodify('else {', s)]);
@@ -206,9 +210,6 @@ var goContent = ns => {
 	if( node.type === 'Text' ){
 		return R.composeK( goContent, tail(ns), textElement )(State.of(node));
 	}
-	else if( node.name === 'branchrow' ){
-		return R.composeK(goContent, tail(ns), gridRow)(State.of(node));
-	}
 	else if( node.name === 'branch' ){
 		return R.composeK(goContent, tail(ns), branchTerminal)(State.of(node));
 	}
@@ -245,9 +246,6 @@ var goContent = ns => {
 		else if( node.name === 'else' ){
 			return content(elseBegin, closeBrace);
 		}
-        else if( node.name === 'branchgrid' ){
-            return content(gridBegin, closeBrace);
-        }
         else if( node.name === 'script' ){
             return content(scriptBegin, scriptEnd);
         }
@@ -261,13 +259,6 @@ var goContent = ns => {
     else{
 		return State.of([]);
 	}
-}
-
-// defineFunc :: node -> String
-var defineFunc = node => {
-    var name = node.attributes.find( a => a.name === 'name' );
-    var args = "$id, $node, $model, $context, $templates, $options, $siblings, $parent, $index";
-    return "export const " + name.value + " = ({" + args + "}) => {";
 }
 
 // maybeLog :: node -> String
@@ -285,6 +276,12 @@ var maybeIf = node => {
     return i && 'if(!(' + i.value + ')) return;';
 }
 
+// defineFunc :: node -> String
+var defineFunc = node => {
+	var tmplFuncArgs = "$id, $node, $model, $context, $templates, $functions, $options, $siblings, $parent, $index";
+    return "export const " + getAttr('name', node.attributes) + " = ($data) => {const {" + tmplFuncArgs + "} = $data;";
+}
+
 // templates :: [node] => State([node], state)
 var templates = ns => {
 
@@ -292,11 +289,9 @@ var templates = ns => {
 		return State.of("end");
 	}
 
-	var node = ns[0];
+	var node = R.head(ns);
 
-
-    if( node.name === 'template' ){
-        return R.composeK( 
+	var templFunc = R.composeK( 
 				templates,
 				tail(ns),
                 appendToBody( R.always("}") ),
@@ -306,10 +301,9 @@ var templates = ns => {
                 appendToBody( maybeIf ),
                 appendToBody( maybeLog ),
                 appendToBody( defineFunc )
-				)( State.of(node) );
-    }
+			);
+    return ( node.name === 'template' ) ? templFunc( State.of(node) ) : templates( R.tail( ns ) );
 
-	return templates( R.tail( ns ) );
 }
 
 var translate = R.composeK(templates, globals);
