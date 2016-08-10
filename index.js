@@ -46,14 +46,15 @@ var getStatAttr = a => [ '"' + a.name + '"', '"' + a.value + '"' ];
 var getAttr = (name,attrs) => R.compose( getVal, R.find(R.propEq('name',name)))(attrs);
 
 // makeSignal :: [String] -> String
-var makeSignal = xs => "$event => document.body.dispatchEvent(new CustomEvent(" + R.trim(R.head(xs)) + ",{detail:[" + R.join(",", R.tail(xs)) + "]}))";
+A
+var makeSignal = xs => "$event => document.body.dispatchEvent(new CustomEvent(" + R.trim(R.head(xs)) + ",{detail:" + (R.join("", R.tail(xs)) || 'null') + "}))";
 
 // parseSignal :: String -> String
 var parseSignal = R.compose( makeSignal, R.filter(R.compose(R.not, R.isEmpty)), R.split(" "), R.replace( /\{!\s*([^{}]+)\s*\}/, '$1') );
 
 // parseText :: String -> String
 var parseText = R.compose(
-        R.replace( /\{=\s*([^{}]+)\s*\}/g, '" + $1($data) + "'),
+        R.replace( /\{=\s*([^{} ]+)\s*\}/g, '" + $functions["$1"]($data) + "'),
         R.replace( /\{([^=][^{}]+)\}/g, '" + ($1) + "')
         );
 
