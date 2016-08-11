@@ -46,7 +46,7 @@ var getStatAttr = a => [ '"' + a.name + '"', '"' + a.value + '"' ];
 var getAttr = (name,attrs) => R.compose( getVal, R.find(R.propEq('name',name)))(attrs);
 
 // makeSignal :: [String] -> String
-A
+
 var makeSignal = xs => "$event => document.body.dispatchEvent(new CustomEvent(" + R.trim(R.head(xs)) + ",{detail:" + (R.join("", R.tail(xs)) || 'null') + "}))";
 
 // parseSignal :: String -> String
